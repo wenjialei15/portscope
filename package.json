@@ -1,6 +1,6 @@
 {
   "name": "portscope",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Web Serial based serial port protocol analyzer with plugin parsers, live plotting and session replay",
   "type": "module",

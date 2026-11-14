@@ -29,6 +29,13 @@ export class ByteQueue {
     if (chunk.length === 0) return;
 
     if (chunk.length > this.capacity) {
+      /*
+       * 一次 push 就超过整个容量（极少见，但真的会发生：粘贴一大段
+       * 回放数据时）。前面的部分必须丢掉，同时必须计入 dropped——
+       * 早期版本只截断不计数，界面上一直显示「丢弃 0 字节」，
+       * 而实际上数据已经缺了一大截，排查时完全摸不着头脑。
+       */
+      this.dropped += chunk.length - this.capacity;
       chunk = chunk.subarray(chunk.length - this.capacity);
     }
 
@@ -73,6 +80,11 @@ export class ByteQueue {
   clear(): void {
     this.head = 0;
     this.len = 0;
+  }
+
+  /** 清空丢弃计数（用户主动清屏时调用，表示「从现在重新开始算」） */
+  resetDropped(): void {
+    this.dropped = 0;
   }
 
   toArray(): Uint8Array {

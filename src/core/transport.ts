@@ -23,7 +23,10 @@ export class WebSerialTransport implements Transport {
   readonly kind = 'serial' as const;
   readonly label: string;
   private handlers: TransportHandlers = { onData: () => {}, onClose: () => {} };
+  private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private closing = false;
+  /** 写入串行化队列：WritableStream 同一时刻只允许一个 writer */
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly port: SerialPort,
@@ -40,31 +43,55 @@ export class WebSerialTransport implements Transport {
   }
 
   async open(): Promise<void> {
-    await this.port.open(this.options);
+    // 重连时必须复位，否则上一次 close 留下的状态会让 readLoop 立刻退出
     this.closing = false;
+    this.writeChain = Promise.resolve();
+    await this.port.open(this.options);
     void this.readLoop();
   }
 
   private async readLoop(): Promise<void> {
     const port = this.port;
-    while (port.readable) {
+    while (!this.closing && port.readable) {
       const reader = port.readable.getReader();
+      this.reader = reader;
       try {
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
           if (value && value.length > 0) this.handlers.onData(value);
         }
+        break;
       } catch (err) {
+        // 主动关闭时 reader.cancel() 也会让 read() 抛错，这属于正常路径
         if (!this.closing) this.handlers.onClose(describe(err));
         break;
       } finally {
-        reader.releaseLock();
+        this.reader = null;
+        try {
+          reader.releaseLock();
+        } catch {
+          // 已被 cancel 的情况下锁可能已经释放
+        }
       }
     }
   }
 
-  async write(bytes: Uint8Array): Promise<void> {
+  write(bytes: Uint8Array): Promise<void> {
+    /*
+     * 串行化写入。两个按钮几乎同时点下时会并发调用 write()，
+     * 而 WritableStream 同一时刻只允许一个 writer —— 第二个
+     * getWriter() 会直接抛 "already locked"，表现为偶发的发送失败。
+     */
+    const task = this.writeChain.then(() => this.writeNow(bytes));
+    this.writeChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  private async writeNow(bytes: Uint8Array): Promise<void> {
     const writable = this.port.writable;
     if (!writable) throw new Error('串口不可写，可能已断开');
     const writer = writable.getWriter();
@@ -76,11 +103,33 @@ export class WebSerialTransport implements Transport {
   }
 
   async close(): Promise<void> {
+    if (this.closing) return;
     this.closing = true;
+
+    // 先把排队中的写入放完，避免最后一条指令被丢掉
+    await this.writeChain.catch(() => undefined);
+
+    /*
+     * 必须先 cancel reader。reader 卡在 read() 上时，port.close() 会一直
+     * 等它释放锁，表现为「点断开没反应，要等好几秒」。
+     */
+    const reader = this.reader;
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch (err) {
+        console.warn('[portscope] 取消串口读取失败', err);
+      }
+    }
+
     try {
       await this.port.close();
-    } catch {
-      // 设备可能已被拔出，忽略关闭错误
+    } catch (err) {
+      /*
+       * 设备被拔掉时 close() 会抛 InvalidStateError，属于预期情况，
+       * 但不能静默吞掉——记一条日志，排查「为什么重连不上」时用得到。
+       */
+      console.warn('[portscope] 关闭串口时出错', err);
     }
   }
 }

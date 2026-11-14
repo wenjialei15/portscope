@@ -6,6 +6,9 @@
 
 零后端、零安装、零依赖运行时，构建产物 25 KB。
 
+[![CI](https://github.com/wenjialei15/portscope/actions/workflows/deploy.yml/badge.svg)](https://github.com/wenjialei15/portscope/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 </div>
 
 ---

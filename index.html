@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PortScope — 串口协议分析工具</title>
+    <meta
+      name="description"
+      content="纯前端串口协议分析工具：Web Serial 实时抓包、插件化协议解析、波形可视化、会话录制与回放。"
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128225;</text></svg>" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">PortScope</span>
+        <span class="brand-ver">v0.1</span>
+      </div>
+
+      <div class="conn-group">
+        <select id="cfg-baud" class="ctl" title="波特率">
+          <option>9600</option>
+          <option>19200</option>
+          <option>38400</option>
+          <option>57600</option>
+          <option selected>115200</option>
+          <option>230400</option>
+          <option>460800</option>
+          <option>921600</option>
+        </select>
+        <select id="cfg-parity" class="ctl" title="校验位">
+          <option value="none" selected>无校验</option>
+          <option value="even">偶校验</option>
+          <option value="odd">奇校验</option>
+        </select>
+        <button id="btn-connect" class="btn btn-primary">连接串口</button>
+        <button id="btn-mock" class="btn">模拟设备</button>
+      </div>
+
+      <div class="opts-group">
+        <label class="field">
+          <span>解析</span>
+          <select id="cfg-parser" class="ctl"></select>
+        </label>
+        <button id="btn-theme" class="btn btn-icon" title="切换主题">◐</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main class="workspace">
+      <section class="stream-panel">
+        <div class="panel-head">
+          <div class="seg">
+            <button class="seg-btn is-active" data-view="hex">HEX</button>
+            <button class="seg-btn" data-view="text">文本</button>
+            <button class="seg-btn" data-view="decode">解码</button>
+          </div>
+          <div class="panel-tools">
+            <label class="check"><input type="checkbox" id="opt-autoscroll" checked /><span>自动滚动</span></label>
+            <label class="check"><input type="checkbox" id="opt-pause" /><span>暂停</span></label>
+            <button id="btn-clear" class="btn btn-sm">清空</button>
+            <button id="btn-export" class="btn btn-sm">导出</button>
+          </div>
+        </div>
+        <div id="stream-body" class="stream-body">
+          <div class="empty-hint">
+            <p class="empty-title">还没有数据</p>
+            <p class="empty-sub">点击「模拟设备」立刻体验，无需任何硬件。</p>
+          </div>
+        </div>
+        <div class="stream-foot">
+          <span id="foot-info">0 字节</span>
+          <span class="spacer"></span>
+          <button id="btn-record" class="btn btn-sm">开始录制</button>
+          <button id="btn-replay" class="btn btn-sm" disabled>回放</button>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="panel chart-panel">
+          <div class="panel-head">
+            <span class="panel-title">通道波形</span>
+            <span id="chart-hint" class="panel-hint">等待解析器输出数值</span>
+          </div>
+          <canvas id="chart"></canvas>
+        </div>
+        <div class="panel stats-panel">
+          <div class="panel-head"><span class="panel-title">实时统计</span></div>
+          <div id="stats-body" class="stats-grid"></div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="composer">
+      <div class="composer-row">
+        <select id="send-mode" class="ctl ctl-sm">
+          <option value="hex" selected>HEX</option>
+          <option value="text">文本</option>
+        </select>
+        <input
+          id="send-input"
+          class="send-input"
+          type="text"
+          spellcheck="false"
+          placeholder="例如 01 03 00 00 00 04"
+        />
+        <button id="btn-send" class="btn btn-primary">发送</button>
+        <span class="divider"></span>
+        <label class="field">
+          <span>周期</span>
+          <input id="send-interval" class="ctl ctl-num" type="number" min="10" step="10" value="1000" />
+          <span class="unit">ms</span>
+        </label>
+        <button id="btn-loop" class="btn" disabled>循环发送</button>
+      </div>
+      <div id="quick-bar" class="quick-bar"></div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

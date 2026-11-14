@@ -7,12 +7,15 @@ import type { Transport } from './core/transport';
 import { Stats } from './core/stats';
 import { Recorder, hexToBytes, isRecording, replay } from './core/recorder';
 import type { Recording } from './core/recorder';
+import { MAX_RECORDING_FILE_BYTES } from './core/recorder';
 import { WaveChart } from './ui/chart';
 import { formatTime, parseHexInput, toHex, toText } from './core/bytes';
 import type { DecodedFrame, Direction, Parser } from './core/types';
 
 const MAX_ROWS = 1500;
 const IDLE_FLUSH_MS = 120;
+/** 帧头卡住时，空闲多久后强制重同步（内容由各协议自己判断） */
+const IDLE_RESYNC_MS = 20;
 const THEME_KEY = 'portscope-theme';
 
 function el<T extends HTMLElement>(id: string): T {
@@ -45,6 +48,8 @@ const recorder = new Recorder();
 const chart = new WaveChart(el<HTMLCanvasElement>('chart'));
 const records: StreamRecord[] = [];
 let rowEls: HTMLElement[] = [];
+/** 已经上报给统计面板的丢弃字节数，用来算增量 */
+let reportedDropped = 0;
 
 /* ---------------------------------- 渲染 ---------------------------------- */
 
@@ -136,6 +141,9 @@ function rebuildStream(): void {
 function clearStream(): void {
   records.length = 0;
   rowEls = [];
+  queue.clear();
+  queue.resetDropped();
+  reportedDropped = 0;
   const body = el<HTMLDivElement>('stream-body');
   body.textContent = '';
   const hint = document.createElement('div');
@@ -163,7 +171,9 @@ function renderStats(): void {
     ['TX 帧', String(s.txFrames), false],
     ['接收速率', `${s.rxRate.toFixed(0)} B/s`, false],
     ['帧率', `${s.frameRate.toFixed(1)} /s`, false],
-    ['异常帧', String(s.badFrames), s.badFrames > 0],
+    ['CRC 错误', String(s.crcErrors), s.crcErrors > 0],
+    ['异常响应', String(s.exceptions), s.exceptions > 0],
+    ['丢弃字节', formatBytes(s.droppedBytes), s.droppedBytes > 0],
     ['待解析', `${queue.size} B`, false],
   ];
   el<HTMLDivElement>('stats-body').innerHTML = cells
@@ -206,7 +216,18 @@ function handleStep(step: ReturnType<Parser['parse']>): boolean {
   }
   queue.discard(step.consumed);
   stats.addRxFrame();
-  if (isBadFrame(step.decoded)) stats.addBadFrame();
+
+  /*
+   * 按帧级状态分类计数。CRC 错误和 Modbus 异常响应是两件完全不同的事：
+   * 前者说明链路有问题（查线缆、波特率），后者说明设备明确回了错误码
+   * （查寄存器地址、数量）。混在一个数字里，排查方向就丢了。
+   */
+  if (step.decoded.status === 'crc-error') {
+    stats.addCrcError();
+  } else if (step.decoded.status === 'exception') {
+    stats.addException();
+  }
+
   pushRecord({ ts: Date.now(), dir: 'rx', bytes: step.frame, decoded: step.decoded });
   if (step.decoded.series.length > 0) chart.push(step.decoded.series);
   return true;
@@ -223,6 +244,14 @@ function onRxChunk(chunk: Uint8Array): void {
   stats.addRx(chunk.length);
   recorder.record('rx', chunk);
   queue.push(chunk);
+
+  // 缓冲区溢出丢弃的字节要计入统计，否则界面看不出「数据其实缺了一截」
+  const dropped = queue.droppedBytes;
+  if (dropped > reportedDropped) {
+    stats.addDropped(dropped - reportedDropped);
+    reportedDropped = dropped;
+  }
+
   pump();
 }
 
@@ -416,7 +445,11 @@ function toggleRecord(): void {
         JSON.stringify(recording, null, 2),
         'application/json',
       );
-      notice(`录制结束：${recording.events.length} 条事件已保存为 JSON。`);
+      notice(
+        recorder.isTruncated
+          ? `录制结束：已达 ${recording.events.length} 条上限，之后的数据未记录。`
+          : `录制结束：${recording.events.length} 条事件已保存为 JSON。`,
+      );
     } else {
       notice('录制期间没有捕获到数据。');
     }
@@ -459,6 +492,7 @@ function startReplay(recording: Recording): void {
       }
     },
     () => {
+      state.replayCancel = null;
       stopReplay();
       notice('回放结束。');
     },
@@ -477,11 +511,17 @@ function pickRecording(): void {
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (!file) return;
+
+    if (file.size > MAX_RECORDING_FILE_BYTES) {
+      notice(`录制文件 ${(file.size / 1024 / 1024).toFixed(1)} MB，超过 32 MB 上限，已拒绝。`);
+      return;
+    }
+
     void file.text().then((text) => {
       try {
         const data: unknown = JSON.parse(text);
         if (!isRecording(data)) {
-          notice('这不是 PortScope 的录制文件。');
+          notice('这不是有效的 PortScope 录制文件（格式、版本或事件内容校验未通过）。');
           return;
         }
         startReplay(data);
@@ -606,12 +646,35 @@ function init(): void {
   window.setInterval(renderStats, 250);
   renderStats();
 
-  // 无法自定界的协议（原始流）靠空闲间隔收尾。
+  /*
+   * 空闲处理，两件事：
+   * 1. 原始流这类无法自定界的协议，靠空闲间隔切帧（flush）
+   * 2. Modbus 遇到噪声凑出的超长候选帧会一直等下去，空闲超时后
+   *    必须丢弃队首字节重同步，否则后面的有效帧全被堵住（onIdle）
+   */
   window.setInterval(() => {
+    if (queue.size === 0) return;
+
+    const idle = performance.now() - state.lastDataAt;
+
     const flush = state.parser.flush;
-    if (!flush || queue.size === 0) return;
-    if (performance.now() - state.lastDataAt < IDLE_FLUSH_MS) return;
-    handleStep(flush.call(state.parser, queue));
+    if (flush && idle >= IDLE_FLUSH_MS) {
+      const step = flush.call(state.parser, queue);
+      if (step) {
+        handleStep(step);
+        pump();
+      }
+      return;
+    }
+
+    const onIdle = state.parser.onIdle;
+    if (onIdle && idle >= IDLE_RESYNC_MS) {
+      const step = onIdle.call(state.parser, queue, idle);
+      if (step) {
+        handleStep(step);
+        pump();
+      }
+    }
   }, 60);
   // 分享演示链接用：?demo=1 自动启动模拟从站
   if (new URLSearchParams(location.search).has('demo')) {

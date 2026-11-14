@@ -4,7 +4,7 @@
 
 **浏览器里的串口协议分析仪** —— Web Serial 直连、CRC 驱动帧同步、实时波形、会话录制回放。
 
-零后端、零安装、零依赖运行时，构建产物 25 KB。
+零后端、零安装、零依赖运行时，构建产物 27 KB。
 
 [![CI](https://github.com/wenjialei15/portscope/actions/workflows/deploy.yml/badge.svg)](https://github.com/wenjialei15/portscope/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -65,7 +65,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/<your-name>/portscope.git
+git clone https://github.com/wenjialei15/portscope.git
 cd portscope
 npm install
 npm run dev        # http://localhost:5173
@@ -102,7 +102,7 @@ flowchart LR
     R -.JSON.-> A
 ```
 
-核心是一条单向管线：**字节流 → 环形缓冲 → 解析器切帧 → 解码结果 → 三个消费者**。界面不参与任何协议判断，解析器也不知道 DOM 的存在，所以解析器可以脱离浏览器单独测试——`tests/` 里 33 个用例全部只依赖 Node。
+核心是一条单向管线：**字节流 → 环形缓冲 → 解析器切帧 → 解码结果 → 三个消费者**。界面不参与任何协议判断，解析器也不知道 DOM 的存在，所以解析器可以脱离浏览器单独测试——`tests/` 里 65 个用例全部只依赖 Node。
 
 ```
 src/
@@ -125,7 +125,7 @@ tests/               Vitest 单元测试
 ## 几个设计取舍
 
 **为什么不用 React / Vue。**
-这是一个单屏工具，状态全部集中在 `main.ts` 的一个对象里，没有组件复用需求，也没有路由。引框架会让 bundle 从 25 KB 涨到 150 KB 以上，而项目真正的复杂度在协议解析，不在视图层。用一个 30 行的 `el()` 助手加直接 DOM 操作就够了。
+这是一个单屏工具，状态全部集中在 `main.ts` 的一个对象里，没有组件复用需求，也没有路由。引框架会让 bundle 从 27 KB 涨到 150 KB 以上，而项目真正的复杂度在协议解析，不在视图层。用一个 30 行的 `el()` 助手加直接 DOM 操作就够了。
 
 **为什么手写 Canvas 而不是 Chart.js。**
 串口数据是高频推送的，通用图表库每次更新都要重建数据集对象，在 1000 帧/秒的场景下开销不可接受。手写的绘制逻辑不到 150 行，滚动窗口、坐标变换、降采样都完全可控。
@@ -193,6 +193,12 @@ export const PARSERS: Parser[] = [modbusParser, lineParser, rawParser, myProtoPa
 - 寄存器按 16 位无符号大端展示，`float32` / 32 位组合值还不支持
 - 波形通道上限 6 个，数据不落盘，刷新页面即清空
 - 一次只能连接一个串口
+- **串口相关逻辑没有在真实硬件上验证过**：连接、断开、热插拔、异常拔线这些行为都只在模拟对象上测过。如果你接真设备发现了差异，欢迎提 issue
+- 回放是「重放录到的字节流」，不会真的向设备发指令，也不会模拟设备应答
+
+## 版本
+
+当前 v0.1.1。变更记录见 [CHANGELOG.md](./CHANGELOG.md)，贡献方式见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 路线图
 
